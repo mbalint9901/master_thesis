@@ -1,0 +1,246 @@
+---
+title: "EPU elemzés státusz"
+output: pdf_document
+date: "`r format(Sys.time(), '%Y. %B %d.')`"
+editor_options: 
+  chunk_output_type: console
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile, encoding = encoding, output_dir = "2_reports/report_pdf", output_file = stringr::str_c("report_", janitor::make_clean_names(Sys.Date()))) })
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(
+  comment = "#>", echo = FALSE, warning = FALSE, error = FALSE, message = FALSE
+)
+
+```
+
+
+```{r}
+
+NiceName <- function(x){
+  case_when(
+    x == "vg" ~ 'VG',
+    x == "mtva" ~ "MTI",
+    x == "index" ~ "Index.hu",
+    x == "hvg" ~ "HVG",
+    x == "n" ~ "# of articles",
+    x == "min" ~ "Minimum available date",
+    x == "max" ~ "Maximum available date",
+    TRUE ~ as.character(x)
+  )
+}
+
+
+library(tidyverse)
+library(lubridate)
+source("00_board_setup.R")
+source("utils.R")
+theme_set(theme_minimal())
+
+.board_data <- board_folder(str_c(board_url, "/data"))
+
+df_total_epu_scale <- read_data("df_epu_scale", .board_data) |> 
+  filter(time_month != floor_date(Sys.Date(), "months"))
+
+df_total_epu_aggr <- read_data("df_total_epu_aggr",
+                               .board_data) |> 
+  filter(time_month != floor_date(Sys.Date(), "months"))
+
+```
+
+Újságonként a cikkek száma és elérhetősége az alábbiak szerint alakul, ugyanakkor az MTVA gazdasági cikkeinek száma csak 2003 közepétől elérhető, így elengendő adatunk csak 2003-12-01-től áll rendelkezésre. 
+
+```{r}
+df_total_epu_aggr %>% 
+  mutate(time_month = as.Date(time_month)) %>% 
+  group_by(newspaper_list) %>% 
+  summarise(
+    min = as.character(min(time_month)),
+    max = as.character(max(time_month)),
+    n = as.character(scales::comma(sum(n, na.rm = T), big.mark = " "))
+  ) %>% 
+  ungroup() %>% 
+  pivot_longer(-(1)) %>% 
+  mutate_all(NiceName) |> 
+  ggplot(aes(
+    y = newspaper_list,
+    x =  name,
+    label = value,
+    fill = newspaper_list
+  )) +
+  geom_tile() +
+  geom_text() +
+  ggsci::scale_fill_jco(alpha = 0.2) +
+  scale_x_discrete(limits = rev) +
+  scale_y_discrete(limits = rev) +
+  guides(fill = "none") +
+  labs(x = NULL, y = "Newspaper") +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank()
+  )
+
+```
+
+
+
+
+Hogyha a 4 újságot vizsgáljuk meg, akkor láthatjuk, hogy időben változó annak a hatása, hogy az adott szövegek mennyire mozgatják a teljes átlagot.
+
+Az utolsó 5 évben az EPU átlaga alacsonyabb volt, mint a HVG nélküli átlag, így az felfelé húzza az átlagot
+
+
+
+```{r}
+x <- crossing(
+  newspaper_filter = 
+    c("hvg",
+      "vg",
+      "index",
+      "mtva"),
+df_total_epu_scale) |> 
+  group_by(newspaper_filter, time_month) |> 
+  group_modify(.f = ~filter(.x, newspaper_list != first(.y[[1]]))) |> 
+  summarise(mean_without = mean(EPU_ratio_norm)) |> 
+  ungroup()
+
+```
+
+
+```{r}
+df_total_epu_scale |> 
+  group_by(time_month) |> 
+  mutate(mean = mean(EPU_ratio_norm)) |> 
+  ungroup() |> 
+  left_join(x, by = join_by("newspaper_list" == "newspaper_filter",
+                            "time_month")) |> 
+  mutate(
+    mape = mean - mean_without
+  ) |> 
+  ggplot(aes(x = as.Date(time_month), y = mape,
+             fill = newspaper_list)) +
+  geom_col(position = position_stack()) +
+  facet_wrap(~newspaper_list) +
+  ggsci::scale_fill_jco() +
+  # ggsci::scale_color_jco() +
+  labs(x = "Month", y = "Difference in mean w/o newspaper", fill = "Newspaper")
+```
+
+
+Egy ábrán ábrázolva a 4 újságot láthatjuk, hogy a trendvonalak viszonylag hasonlóan alakulnak lokális és globális maximum is leginkább 2011 végén látható, az október-december közötti értékek a teljes átlagban is a maximumnak számítanak.
+
+Ugyanakkor már látható, hogy a COVID-19 válság után felívelés következik az indexben, amely folyamatosan emelkedik, így egy újabb maximum pont még várható az idősorokban a következő hónapokban.
+
+```{r}
+df_total_epu_scale %>% 
+  ggplot(aes(x = as.Date(time_month),
+             y = EPU_ratio_norm,
+             color = newspaper_list)) +
+  geom_line() +
+  geom_smooth(method = "loess", span = 0.2) +
+  # facet_wrap(~newspaper_list) +
+  ggsci::scale_color_jco() +
+  labs(x = "Month", y = "Normalized EPU", color = "Newspaper")
+```
+
+
+A cikkek számában konzisztens maradt a HVG újsága, ugyanakkor az Index és a Világgazdaság is egy csökkenő trendet mutat 2010 után, valamint felívelést a 2020 utáni időszakban.
+Az MTVA hírarchívuma folyamatos csökkenést mutat a cikkek számában 2012 után, amelynek az okait nem vizsgáltuk, azonban ez is befolyásolhatja az eredményeket.
+
+```{r}
+df_total_epu_scale %>% 
+  ggplot(aes(x = as.Date(time_month),
+             y = n,
+             color = newspaper_list)) +
+  geom_line() +
+  geom_smooth() +
+  labs(x = "Month", y = "# of articles", color = "Newspaper") +
+  facet_wrap(~newspaper_list, scales = "free_y",
+             ncol = 1) +
+  ggsci::scale_color_jco()
+```
+
+A hasonló időbeni trend miatt azonban fontos megvizsgálni azt a tényt is, hogy az EPU index mennyire mozog együtt a cikkek nominális számával. Az korreláció legtöbb esetben alacsonynak számít, így nem mondhatjuk, hogy ezek tartalmaznák az index egyetlen hozzáadott értékét.
+
+```{r}
+df_total_epu_scale %>% 
+  # filter(newspaper_list != "mtva") %>% 
+  ggplot(aes(x = n, y=EPU_ratio_norm, color = newspaper_list)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  labs(x = "# of articles", y = "EPU normalized", color = "Newspaper") +
+  facet_wrap(~newspaper_list, scales = "free_x",
+             ncol = 2) +
+  ggsci::scale_color_jco()
+```
+
+
+
+A végleges index értéke az alábbi szerint alakul:
+
+```{r}
+df_total_epu_scale |> 
+  mutate(time_month = as.Date(time_month)) |> 
+  # filter(EPU_total == max(EPU_total))
+  ggplot(aes(x = time_month, y= EPU_total, group = 1)) +
+  geom_line() +
+  # geom_smooth(
+  #   span = 14,
+  #   method = "gam",
+  #   # formula = y ~ poly(x, 4),
+  #   color = ggsci::pal_jco()(4)[2]) +
+  labs(x = "Month", y = "EPU normalized") +
+  ggsci::scale_color_jco()
+```
+
+
+Amennyiben a többi országgal akarjuk összehasonlítani a hazai adatokat, a Magyarországra kijelölt vizsgálati periódusra szükséges normálni a külföldi EPU indexeket. Ez jelenleg a 2003-12-01 és 2022-12-01 közötti 100-as átlagot jelenti.
+
+```{r}
+
+start_date <- "2003-12-01"
+end_date <- "2022-12-01"
+
+tibble(
+  country = c("UK", "US", "SPAIN")) |> 
+  mutate(
+    data = 
+    map(country, ~readxl::read_xlsx(
+      str_c("0_RData/Orszagok_EPU_Excelek/",
+            .x, "_EPU.xlsx"),
+      skip = 1,
+      col_names = c("Year", "Month", "EPU"),
+      col_types = c("text", "text", "numeric"))
+  )
+) |> 
+  unnest(data) |> 
+  transmute(
+    date = lubridate::ymd(str_c(Year, ". ", Month, ". 01.")),
+    country,
+    EPU) |> 
+  (\(x) left_join(
+    x, 
+    x |> 
+  group_by(country) |> 
+  group_modify(~filter(.x, date <= end_date, date >= start_date)) |> 
+  summarise(
+    mn = mean(EPU, na.rm = T)
+    )))() |> 
+  mutate(EPU = EPU*100/mn) |> 
+  select(-mn) |> 
+  bind_rows(
+    df_total_epu_scale |> 
+  transmute(date = as.Date(time_month),
+            EPU = EPU_total,
+         country = "HUNGARY")
+  ) |> 
+  filter(date >= as.Date("2003-12-01")) |> 
+  ggplot(aes(x = date, y = EPU, color = country)) +
+  geom_line() +
+  geom_smooth(method = "loess", span = 0.1) +
+  ggsci::scale_color_jco() +
+  labs(color = "Country", x = "Month", y = "EPU value")
+```
+
+

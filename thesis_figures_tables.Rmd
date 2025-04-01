@@ -1,0 +1,490 @@
+---
+title: "thesis_figure_tables"
+output: html_document
+date: "2023-11-25"
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(
+  comment = "#>", echo = FALSE, warning = FALSE, error = FALSE, message = FALSE
+)
+
+```
+
+
+```{r}
+
+NiceName <- function(x){
+  case_when(
+    x == "vg" ~ 'VG',
+    x == "mtva" ~ "MTI",
+    x == "index" ~ "Index.hu",
+    x == "hvg" ~ "HVG",
+    x == "n" ~ "# of articles",
+    x == "min" ~ "Minimum available date",
+    x == "max" ~ "Maximum available date",
+    x == "zz_n < 10" ~ "n < 10",
+    x == "E_ratio" ~ "Economic articles",
+    x == "P_ratio" ~ "Policy articles",
+    x == "U_ratio" ~ "Uncertainty articles",
+    x == "EPU_ratio" ~ "EPU articles",
+    x == "zz_n < 10" ~ "n < 10",
+    x == "cumsum_mean" ~ "Cumulated mean",
+    x == "cumsum_sd" ~ "Cumulated standard deviation",
+    TRUE ~ as.character(x)
+  )
+}
+
+
+scale_fill_jco_man <- function(...){
+  ggplot2:::manual_scale(
+    'fill',
+    values = setNames(
+      ggsci::pal_jco()(9)[-5],
+      c(NiceName(c("hvg", "index", "mtva", "vg")),
+        NiceName(c("E_ratio", "P_ratio", "U_ratio", "EPU_ratio"))
+      )
+    ),
+    ...
+  )
+}
+
+
+scale_color_jco_man <- function(...){
+  ggplot2:::manual_scale(
+    'color',
+    values = setNames(
+      ggsci::pal_jco()(9)[-5],
+      c(
+        NiceName(c("hvg", "index", "mtva", "vg")),
+        NiceName(c("E_ratio", "P_ratio", "U_ratio", "EPU_ratio"))
+      )
+    ),
+    ...
+  )
+}
+
+
+
+library(tidyverse)
+library(lubridate)
+source("00_board_setup.R")
+source("utils.R")
+theme_set(theme_minimal())
+
+.board_data <- board_folder(str_c(board_url, "/data"))
+
+df_total_epu_scale <- read_data("df_epu_scale", .board_data) |> 
+  filter(time_month != floor_date(Sys.Date(), "months"))
+
+df_total_epu_aggr <- read_data("df_total_epu_aggr",
+                               .board_data) |> 
+  filter(time_month != floor_date(Sys.Date(), "months"))
+
+df_total_epu_aggr_EPUbool <- readRDS("df_total_epu_EPUbool.RDS")
+
+```
+
+
+1. Start and end dates of newspapers
+
+```{r}
+
+df_total_epu_aggr |> 
+  mutate(
+    fill = ifelse(
+      n>=10, newspaper_list, "zz_n < 10"
+    ),
+    year = 
+      case_when(
+        (year(time_month) <= 2005) ~ as.Date("2003-10-15"),
+        (year(time_month) >= 2019) ~ as.Date("2023-04-15"),
+        TRUE ~ NA)
+  ) |> 
+  drop_na() |> 
+  mutate_if(is.character, NiceName) |> 
+  arrange(fill) |> 
+  mutate(fill = fct_inorder(fill),
+         fill = fct_relabel(fill, NiceName)) |> 
+  # mutate_at(vars(width), as.double) |> 
+  ggplot(
+    aes(
+      label = n,
+      fill = fill,
+      x = as.Date(time_month),
+      y = newspaper_list
+    )
+  ) +
+  geom_tile(alpha = 0.4, 
+            color = "black") +
+  geom_vline(aes(xintercept = year),
+             size = 1.65) +
+  # facet_wrap(~newspaper_list) +
+  scale_y_discrete(limits = rev) +
+  scale_fill_manual(
+    values = c(ggsci::pal_jco()(4), "black")
+  ) +
+  # geom_vline(xintercept = as.Date("2023-04-15"),
+  #            size = 2) +
+  scale_x_date(date_labels = "%m-%Y",
+               date_breaks = "years") +
+  facet_wrap(~year, scales = "free_x") +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.text = element_blank()
+  ) +
+  labs(x = "Date", y = "Newspapers", fill = "Available data")
+ggsave("3_plots/start_date.png", bg = "white", width = 11, height = 4)
+
+```
+
+
+2. epu ratios
+
+```{r}
+
+df_total_epu_aggr_EPUbool |> 
+  pivot_longer(
+    -(1:3)
+  ) |> 
+  filter(
+    as.Date(time_month) >= as.Date("2003-12-01"),
+    as.Date(time_month) <= as.Date("2022-12-01")
+  ) |> 
+  mutate(
+    name = fct_inorder(name),
+    name = fct_relabel(name, NiceName),
+  ) |> 
+  ggplot(
+    aes( x = as.Date(time_month),
+         y = value,
+         color = name)
+  ) +
+  geom_line() +
+  geom_smooth() +
+  facet_wrap(~NiceName(newspaper_list)) +
+  scale_y_continuous(labels = scales::percent,
+                     limits = c(0,1)) +
+  scale_color_jco_man() +
+  labs(x = "Date",
+       y = "Ratios",
+       color = "Word groups")
+ggsave("3_plots/epu_ratios.png", bg = "white", width = 11, height = 6)
+
+```
+
+
+3. cumulative sd and mean
+
+```{r}
+df_total_epu_aggr %>% 
+  filter(
+    as.Date(time_month) >= as.Date("2003-12-01"),
+    as.Date(time_month) <= as.Date("2022-12-01")
+  ) |> 
+  group_by(newspaper_list) %>% 
+  mutate(
+    cumsum_sd = 
+      roll_sd(EPU_ratio, width = n(), min_obs = 1),
+    
+    cumsum_mean = 
+      roll_mean(EPU_ratio, width = n(), min_obs = 1),
+  ) %>%
+  ungroup() |> 
+  pivot_longer(-(1:4)) |> 
+  left_join(
+    newspaper_sd_list
+  ) |> 
+  mutate(
+    sd = 
+      case_when(
+        (name == "cumsum_sd") & (time_month == "2022-12-01") ~ sd,
+        TRUE ~ NA
+      )
+  ) |> 
+  mutate_if(is.character, NiceName) |> 
+  ggplot(aes(x = 
+               as.Date(time_month), 
+             y = value,
+             color = newspaper_list)) +
+  geom_line(size = 1.2) +
+  ggrepel::geom_label_repel(
+    aes(label = round(sd, digits = 4)),
+    nudge_x = 300,
+    max.overlaps = 40,
+    show.legend = FALSE
+  ) +
+  facet_wrap(~name) +
+  scale_color_jco_man() +
+  labs(
+    x = "Date",
+    y = "Value",
+    color = "Newspaper list"
+  )
+ggsave("3_plots/cum_sd_mean.png", bg = "white", width = 11, height = 4)
+
+
+
+```
+
+
+4. Mean without newspaper
+
+
+```{r}
+df_total_epu_scale |> 
+  group_by(time_month) |> 
+  mutate(mean = mean(EPU_ratio_norm)) |> 
+  ungroup() |> 
+  left_join(x, by = join_by("newspaper_list" == "newspaper_filter",
+                            "time_month")) |> 
+  mutate(
+    mape = mean - mean_without
+  ) |> 
+  mutate_if(is.character, NiceName) |> 
+  ggplot(aes(x = as.Date(time_month), y = mape,
+             fill = newspaper_list)) +
+  geom_col(position = position_stack()) +
+  facet_wrap(~newspaper_list) +
+  scale_fill_jco_man() +
+  # ggsci::scale_color_jco() +
+  labs(x = "Date", y = "Difference in mean w/o newspaper", fill = "Newspaper list")
+ggsave("3_plots/mean_wo.png", bg = "white", width = 11, height = 4)
+```
+
+5. Correlation between number of articles and EPU
+
+
+```{r}
+df_total_epu_scale %>% 
+  group_by(newspaper_list) |> 
+  nest() |> 
+  mutate(cor = map_dbl(data, ~cor(.x$EPU_ratio_norm, .x$n)),
+         max_x = map_dbl(data, ~nth(sort(.x$n), -5)),
+         max_y = map_dbl(data, ~nth(sort(.x$EPU_ratio_norm), -3)),
+  ) |> 
+  unnest() |> 
+  mutate(cor = ifelse(time_month == last(time_month), cor, NA)) |> 
+  ungroup() |> 
+  mutate_if(is.character, NiceName) |> 
+  # filter(newspaper_list != "mtva") %>% 
+  ggplot(aes(x = n, y=EPU_ratio_norm, color = newspaper_list)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  geom_label(aes(label = paste0("\u03C1", " = ", round(cor, 2)), 
+                 x = max_x, y = max_y)) +
+  labs(x = "# of articles", y = "EPU normalized", color = "Newspaper") +
+  facet_wrap(~newspaper_list, 
+             scales = "free_x",
+             ncol = 2) +
+  scale_fill_jco_man() +
+  scale_color_jco_man()
+# ggsci::scale_color_jco() +
+# labs(x = "Date", y = "Difference in mean w/o newspaper", fill = "Newspaper list")
+ggsave("3_plots/cor_n_epu.png", bg = "white", width = 9, height = 7)
+```
+
+
+```{r}
+
+library(ggforce)
+library(glue)
+library(ggtext)
+
+df_total_epu_scale |> 
+  mutate(time_month = as.Date(time_month)) |> 
+  merge(
+    tibble(time_month = ymd(c(
+      "2007. november 1.",
+      "2011. december 1.",
+      "2020. április 1.",
+      "2022. március 1."
+    )),
+    text = c(
+      "2007-08 Global Financial Crisis starts",
+      "Hungary repays and does not renew its financial obligations to the IMF",
+      "Beginning of the COVID-19 pandemic in Europe",
+      "Start of the Russian-Ukrainian war")
+    ), all = T
+  ) %>% 
+  tibble() %>% 
+  select(time_month, EPU_total, text) |> 
+  unique() |> 
+  mutate(
+    date2 = ymd(ifelse(is.na(text), NA, as.character(time_month)))
+  ) %>% 
+  {
+    ggplot(., aes(x =time_month, y = EPU_total, color = "Hungarian EPU index")) +
+      geom_hline(yintercept = 100, linetype = "dashed") +
+      geom_line() +
+      ylim(0,NA) +
+      # geom_line(aes(date, n_sentiment*2, 
+      # color = "Érzelmi szavak száma naponta")) + 
+      # scale_y_continuous(
+      #   name = "Napi új esetek száma",
+      #   # sec.axis = sec_axis(~./2, name="Érzelmi szavak száma naponta")
+      # ) + 
+      geom_mark_circle(data = filter(., !is.na(text)), aes(x=time_month, y = EPU_total, description = glue('{text}'),
+                                                           label = glue("{date2}:"), group = time_month), color = NA, 
+                       expand = unit(2, "mm"), label.family = c("Oswald", "Poppins"), 
+                       label.fontsize = 6,
+                       label.buffer = unit(5, "mm"), con.size = 0.2) +
+      labs(x = NULL, color = NULL,
+           y = "EPU index value") + 
+      ggsci::scale_color_jco() +
+      theme(
+        legend.position = 'bottom'
+      )
+  }
+
+ggsave("3_plots/epu_vf.png", bg = "white", width = 9, height = 5)
+
+```
+
+
+
+```{r}
+
+start_date <- "2003-12-01"
+end_date <- "2022-12-01"
+
+tibble(
+  country = c("UK", "US", "Spain")) |> 
+  mutate(
+    data = 
+    map(country, ~readxl::read_xlsx(
+      str_c("0_RData/Orszagok_EPU_Excelek/",
+            str_to_upper(.x), "_EPU.xlsx"),
+      skip = 1,
+      col_names = c("Year", "Month", "EPU"),
+      col_types = c("text", "text", "numeric"))
+  )
+) |> 
+  unnest(data) |> 
+  transmute(
+    date = lubridate::ymd(str_c(Year, ". ", Month, ". 01.")),
+    country,
+    EPU) |> 
+  (\(x) left_join(
+    x, 
+    x |> 
+  group_by(country) |> 
+  group_modify(~filter(.x, date <= end_date, date >= start_date)) |> 
+  summarise(
+    mn = mean(EPU, na.rm = T)
+    )))() |> 
+  mutate(EPU = EPU*100/mn) |> 
+  select(-mn) |> 
+  bind_rows(
+    df_total_epu_scale |> 
+  transmute(date = as.Date(time_month),
+            EPU = EPU_total,
+         country = "Hungary")
+  ) |> 
+  filter(date >= as.Date("2003-12-01")) |> 
+  ggplot(aes(x = date, y = EPU, color = country)) +
+  geom_line() +
+  geom_smooth(method = "loess", span = 0.1) +
+  ggsci::scale_color_jco() +
+  labs(color = "Country", x = "Date", y = "EPU index value \n(Dec 2003 - Dec 2022 avg. = 100)")
+
+
+ggsave("3_plots/epu_comp.png", bg = "white", width = 9, height = 5)
+```
+
+```{r}
+
+df_total_epu_scale %>% 
+  ggplot(aes(x = as.Date(time_month),
+             y = EPU_ratio_norm,
+             color = NiceName(newspaper_list))) +
+  geom_line() +
+  geom_smooth(method = "loess", span = 0.2) +
+  # facet_wrap(~newspaper_list) +
+  scale_color_jco_man() +
+  labs(x = "Date", y = "EPU normalized", color = "Newspaper list")
+ggsave("3_plots/epu_news.png", bg = "white", width = 9, height = 5)
+```
+
+```{r}
+
+df_total_epu_scale %>% 
+  ggplot(aes(x = as.Date(time_month),
+             y = n,
+             color = NiceName(newspaper_list))) +
+  geom_line() +
+  geom_smooth(method = "loess", span = 0.2) +
+  # facet_wrap(~newspaper_list) +
+  scale_color_jco_man() +
+  labs(x = "Date", y = "# of articles", color = "Newspaper list")
+ggsave("3_plots/n_news.png", bg = "white", width = 9, height = 5)
+```
+
+
+```{r}
+
+countries <- readxl::read_xlsx(
+  "0_RData/Orszagok_EPU_Excelek/aval_country.xlsx",
+  col_names = F
+) |> 
+  `colnames<-`("region") |> 
+  mutate(value = 1)
+world <- map_data("world") |> 
+  left_join(countries) |> 
+  mutate(
+    value = ifelse(is.na(value), "Not available", "Available")
+  )
+world |>
+  ggplot() +
+  geom_map(
+    data = world, map = world,
+    aes(long, lat, map_id = region, fill = value),
+    # show.legend = F
+  )  +
+  scale_fill_manual(
+    values = ggsci::pal_jco()(3)[-2]
+  ) +
+  labs(x = NULL, y = NULL,
+       fill = NULL) +
+  theme(axis.text = element_blank(),
+        legend.position = "bottom")
+ggsave("3_plots/epu_aval_country.png", bg = "white", width = 8, height = 4)
+```
+
+```{r}
+
+HunName <- function(x){
+  case_when(
+    x == "Economy" ~ "gazdasag",
+    x == "Policy" ~ "szakpolitika",
+    x == "Uncertainty" ~ "bizonytalansag",
+  )
+}
+
+source("utils.R")
+
+library(gt)
+
+tibble(
+  Category = 
+    c("Economy", "Policy", "Uncertainty")
+) |> 
+  mutate(
+    `Word list` =
+    map_chr(
+      Category,  ~paste0(get(str_c(HunName(.x), "_szavak")),
+                         collapse = ", ")
+    )
+  ) |> 
+  gt() |> 
+    tab_style(
+    style = cell_text(style = "italic"),
+    locations = cells_body(columns = Category)
+  ) |> 
+  as_latex() |> as.character() |> cat()
+
+```
+
+
+
+
